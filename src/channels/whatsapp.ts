@@ -248,6 +248,55 @@ export class WhatsAppChannel implements Channel {
     }
   }
 
+  async sendImage(jid: string, imagePath: string, caption?: string): Promise<void> {
+    const prefixedCaption = caption
+      ? (ASSISTANT_HAS_OWN_NUMBER ? caption : `${ASSISTANT_NAME}: ${caption}`)
+      : undefined;
+
+    if (!this.connected) {
+      logger.warn({ jid, imagePath }, 'WA disconnected, cannot send image (not queued)');
+      return;
+    }
+
+    try {
+      const imageBuffer = fs.readFileSync(imagePath);
+      await this.sock.sendMessage(jid, { image: imageBuffer, caption: prefixedCaption });
+      logger.info({ jid, imagePath, captionLength: prefixedCaption?.length ?? 0 }, 'Image sent');
+    } catch (err) {
+      logger.error({ jid, imagePath, err }, 'Failed to send image');
+      throw err;
+    }
+  }
+
+  async sendDocument(jid: string, docPath: string, fileName?: string, caption?: string): Promise<void> {
+    if (!this.connected) {
+      logger.warn({ jid, docPath }, 'WA disconnected, cannot send document (not queued)');
+      return;
+    }
+
+    const ext = path.extname(docPath).toLowerCase();
+    const mimeTypes: Record<string, string> = {
+      '.pdf': 'application/pdf',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      '.csv': 'text/csv',
+      '.txt': 'text/plain',
+      '.json': 'application/json',
+      '.zip': 'application/zip',
+    };
+    const mimetype = mimeTypes[ext] ?? 'application/octet-stream';
+    const resolvedFileName = fileName ?? path.basename(docPath);
+
+    try {
+      const docBuffer = fs.readFileSync(docPath);
+      await this.sock.sendMessage(jid, { document: docBuffer, mimetype, fileName: resolvedFileName, caption });
+      logger.info({ jid, docPath, mimetype, fileName: resolvedFileName }, 'Document sent');
+    } catch (err) {
+      logger.error({ jid, docPath, err }, 'Failed to send document');
+      throw err;
+    }
+  }
+
   isConnected(): boolean {
     return this.connected;
   }

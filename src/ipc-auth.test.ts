@@ -52,6 +52,9 @@ beforeEach(() => {
 
   deps = {
     sendMessage: async () => {},
+    sendImage: async () => {},
+    sendDocument: async () => {},
+    resolveContainerPath: (p) => p,
     registeredGroups: () => groups,
     registerGroup: (jid, group) => {
       groups[jid] = group;

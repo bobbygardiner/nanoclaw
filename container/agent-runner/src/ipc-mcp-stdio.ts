@@ -245,6 +245,54 @@ server.tool(
 );
 
 server.tool(
+  'send_image',
+  'Send an image file to the user or group via WhatsApp.',
+  {
+    image_path: z.string().describe('Absolute path to the image file inside the container (e.g., /workspace/group/chart.png)'),
+    caption: z.string().optional().describe('Optional caption to include with the image'),
+  },
+  async (args) => {
+    const data = {
+      type: 'send_image',
+      chatJid,
+      imagePath: args.image_path,
+      caption: args.caption,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(MESSAGES_DIR, data);
+
+    return { content: [{ type: 'text' as const, text: 'Image queued for sending.' }] };
+  },
+);
+
+server.tool(
+  'send_document',
+  'Send a document file (PDF, DOCX, CSV, etc.) to the user or group via WhatsApp.',
+  {
+    doc_path: z.string().describe('Absolute path to the document file inside the container (e.g., /workspace/group/report.pdf)'),
+    file_name: z.string().optional().describe('File name to display in WhatsApp (defaults to the file basename)'),
+    caption: z.string().optional().describe('Optional caption to include with the document'),
+  },
+  async (args) => {
+    const data = {
+      type: 'send_document',
+      chatJid,
+      docPath: args.doc_path,
+      fileName: args.file_name,
+      caption: args.caption,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(MESSAGES_DIR, data);
+
+    return { content: [{ type: 'text' as const, text: 'Document queued for sending.' }] };
+  },
+);
+
+server.tool(
   'register_group',
   `Register a new WhatsApp group so the agent can respond to messages there. Main group only.
 

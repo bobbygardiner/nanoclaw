@@ -471,6 +471,44 @@ async function main(): Promise<void> {
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
       return channel.sendMessage(jid, text);
     },
+    sendImage: (jid, imagePath, caption) => {
+      const channel = findChannel(channels, jid);
+      if (!channel) throw new Error(`No channel for JID: ${jid}`);
+      if (!channel.sendImage) throw new Error(`Channel does not support sendImage`);
+      return channel.sendImage(jid, imagePath, caption);
+    },
+    sendDocument: (jid, docPath, fileName, caption) => {
+      const channel = findChannel(channels, jid);
+      if (!channel) throw new Error(`No channel for JID: ${jid}`);
+      if (!channel.sendDocument) throw new Error(`Channel does not support sendDocument`);
+      return channel.sendDocument(jid, docPath, fileName, caption);
+    },
+    resolveContainerPath: (containerPath, sourceGroup) => {
+      // Translate /workspace/group/ → host group folder
+      const groupDir = resolveGroupFolderPath(sourceGroup);
+      if (containerPath.startsWith('/workspace/group/')) {
+        return path.join(groupDir, containerPath.slice('/workspace/group/'.length));
+      }
+      // Translate /workspace/extra/{name}/ → host path from additionalMounts
+      const extraPrefix = '/workspace/extra/';
+      if (containerPath.startsWith(extraPrefix)) {
+        const rest = containerPath.slice(extraPrefix.length);
+        const slashIdx = rest.indexOf('/');
+        const mountName = slashIdx === -1 ? rest : rest.slice(0, slashIdx);
+        const remainder = slashIdx === -1 ? '' : rest.slice(slashIdx + 1);
+        // Find the group and look up its additionalMounts
+        const group = Object.values(registeredGroups).find(g => g.folder === sourceGroup);
+        const mount = group?.containerConfig?.additionalMounts?.find(
+          m => (m.containerPath ?? path.basename(m.hostPath)) === mountName,
+        );
+        if (mount) {
+          const hostBase = mount.hostPath.replace(/^~/, process.env.HOME ?? '~');
+          return remainder ? path.join(hostBase, remainder) : hostBase;
+        }
+      }
+      // Fallback: return as-is
+      return containerPath;
+    },
     registeredGroups: () => registeredGroups,
     registerGroup,
     syncGroupMetadata: (force) => whatsapp?.syncGroupMetadata(force) ?? Promise.resolve(),

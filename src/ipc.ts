@@ -17,6 +17,9 @@ import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  sendImage: (jid: string, imagePath: string, caption?: string) => Promise<void>;
+  sendDocument: (jid: string, docPath: string, fileName?: string, caption?: string) => Promise<void>;
+  resolveContainerPath: (containerPath: string, sourceGroup: string) => string;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroupMetadata: (force: boolean) => Promise<void>;
@@ -88,6 +91,42 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   logger.warn(
                     { chatJid: data.chatJid, sourceGroup },
                     'Unauthorized IPC message attempt blocked',
+                  );
+                }
+              } else if (data.type === 'send_image' && data.chatJid && data.imagePath) {
+                const targetGroup = registeredGroups[data.chatJid];
+                if (
+                  isMain ||
+                  (targetGroup && targetGroup.folder === sourceGroup)
+                ) {
+                  const hostPath = deps.resolveContainerPath(data.imagePath, sourceGroup);
+                  await deps.sendImage(data.chatJid, hostPath, data.caption);
+                  logger.info(
+                    { chatJid: data.chatJid, imagePath: hostPath, sourceGroup },
+                    'IPC image sent',
+                  );
+                } else {
+                  logger.warn(
+                    { chatJid: data.chatJid, sourceGroup },
+                    'Unauthorized IPC send_image attempt blocked',
+                  );
+                }
+              } else if (data.type === 'send_document' && data.chatJid && data.docPath) {
+                const targetGroup = registeredGroups[data.chatJid];
+                if (
+                  isMain ||
+                  (targetGroup && targetGroup.folder === sourceGroup)
+                ) {
+                  const hostPath = deps.resolveContainerPath(data.docPath, sourceGroup);
+                  await deps.sendDocument(data.chatJid, hostPath, data.fileName, data.caption);
+                  logger.info(
+                    { chatJid: data.chatJid, docPath: hostPath, sourceGroup },
+                    'IPC document sent',
+                  );
+                } else {
+                  logger.warn(
+                    { chatJid: data.chatJid, sourceGroup },
+                    'Unauthorized IPC send_document attempt blocked',
                   );
                 }
               }
