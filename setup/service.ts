@@ -81,6 +81,7 @@ function setupLaunchd(projectRoot: string, nodePath: string, homeDir: string): v
     <key>ProgramArguments</key>
     <array>
         <string>${nodePath}</string>
+        <string>--max-old-space-size=2048</string>
         <string>${projectRoot}/dist/index.js</string>
     </array>
     <key>WorkingDirectory</key>
@@ -218,7 +219,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${nodePath} ${projectRoot}/dist/index.js
+ExecStart=${nodePath} --max-old-space-size=2048 ${projectRoot}/dist/index.js
 WorkingDirectory=${projectRoot}
 Restart=always
 RestartSec=5
@@ -310,7 +311,7 @@ function setupNohupFallback(projectRoot: string, nodePath: string, homeDir: stri
     'fi',
     '',
     'echo "Starting NanoClaw..."',
-    `nohup ${JSON.stringify(nodePath)} ${JSON.stringify(projectRoot + '/dist/index.js')} \\`,
+    `nohup ${JSON.stringify(nodePath)} --max-old-space-size=2048 ${JSON.stringify(projectRoot + '/dist/index.js')} \\`,
     `  >> ${JSON.stringify(projectRoot + '/logs/nanoclaw.log')} \\`,
     `  2>> ${JSON.stringify(projectRoot + '/logs/nanoclaw.error.log')} &`,
     '',
