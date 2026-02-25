@@ -10,9 +10,10 @@ export function escapeXml(s: string): string {
 }
 
 export function formatMessages(messages: NewMessage[]): string {
-  const lines = messages.map((m) =>
-    `<message sender="${escapeXml(m.sender_name)}" time="${m.timestamp}">${escapeXml(m.content)}</message>`,
-  );
+  const lines = messages.map((m) => {
+    const forwardedAttr = m.is_forwarded ? ' forwarded="true"' : '';
+    return `<message sender="${escapeXml(m.sender_name)}" time="${m.timestamp}"${forwardedAttr}>${escapeXml(m.content)}</message>`;
+  });
   return `<messages>\n${lines.join('\n')}\n</messages>`;
 }
 

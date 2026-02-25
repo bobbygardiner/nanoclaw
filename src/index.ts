@@ -361,6 +361,13 @@ async function startMessageLoop(): Promise<void> {
             if (!hasTrigger) continue;
           }
 
+          // For trigger-free groups (main/solo chats), forwarded messages
+          // are stored as context but don't auto-fire the agent.
+          // The agent will see them when the next real message arrives.
+          if (!needsTrigger && groupMessages.every((m) => m.is_forwarded)) {
+            continue;
+          }
+
           // Pull all messages since lastAgentTimestamp so non-trigger
           // context that accumulated between triggers is included.
           const allPending = getMessagesSince(

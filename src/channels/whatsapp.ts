@@ -179,6 +179,14 @@ export class WhatsAppChannel implements Channel {
             msg.message?.videoMessage?.caption ||
             '';
 
+          const isForwarded = !!(
+            msg.message?.extendedTextMessage?.contextInfo?.isForwarded ||
+            msg.message?.imageMessage?.contextInfo?.isForwarded ||
+            msg.message?.videoMessage?.contextInfo?.isForwarded ||
+            msg.message?.documentMessage?.contextInfo?.isForwarded ||
+            msg.message?.audioMessage?.contextInfo?.isForwarded
+          );
+
           const sender = msg.key.participant || msg.key.remoteJid || '';
           const senderName = msg.pushName || sender.split('@')[0];
 
@@ -218,6 +226,7 @@ export class WhatsAppChannel implements Channel {
             timestamp,
             is_from_me: fromMe,
             is_bot_message: isBotMessage,
+            is_forwarded: isForwarded,
           });
         }
       }
