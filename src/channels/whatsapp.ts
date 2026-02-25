@@ -71,6 +71,7 @@ export class WhatsAppChannel implements Channel {
       printQRInTerminal: false,
       logger,
       browser: Browsers.macOS('Chrome'),
+      markOnlineOnConnect: false,
     });
 
     this.sock.ev.on('connection.update', (update) => {
@@ -318,7 +319,9 @@ export class WhatsAppChannel implements Channel {
 
   async setTyping(jid: string, isTyping: boolean): Promise<void> {
     try {
-      const status = isTyping ? 'composing' : 'paused';
+      // Use 'unavailable' (not 'paused') when done — 'paused' keeps the session
+      // visible as online to WhatsApp, which suppresses phone notifications.
+      const status = isTyping ? 'composing' : 'unavailable';
       logger.debug({ jid, status }, 'Sending presence update');
       await this.sock.sendPresenceUpdate(status, jid);
     } catch (err) {
