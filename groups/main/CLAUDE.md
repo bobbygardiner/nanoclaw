@@ -16,6 +16,67 @@ Football analytics using roque-suite tools. Use the skills listed in the roque-s
 - **No adapted or approximated output formats.** Use roque-suite templates as-is. If creating something new, follow the design principles in the repo. Never produce a web-based version of an established report format.
 - **If something fails, say so.** Don't work around it silently — explain the error and wait for direction.
 
+---
+
+# NanoClaw Agent Rules
+
+You are an automated agent running roque-suite tools via CLI. Follow these rules exactly.
+
+## Rule 1: Use CLI Tools, Not Raw Queries
+
+**NEVER** run ad-hoc SQL queries, raw Python scripts, or direct database access to answer questions or debug problems. The CLI tools exist for this purpose and are tested.
+
+```bash
+# CORRECT: Use the CLI
+python -m tools.analyst.cli player "Raul Jimenez"
+python -m tools.player_report.cli render 5568 -c 2 -p 7
+
+# WRONG: Ad-hoc SQL
+python -c "from tools.analyst.tools import execute_query; execute_query('SELECT ...')"
+```
+
+If a CLI command returns unexpected results, re-run it with different parameters. Do NOT attempt to "debug" by querying the database directly — you will misinterpret the schema and reach wrong conclusions.
+
+## Rule 2: Follow Skills Step by Step
+
+When a skill (e.g. `/player-report`) defines a numbered workflow, execute each step in order. Do not skip steps, combine steps, or improvise alternatives.
+
+**Read the full skill file before starting.** If a step says "REQUIRED", it is not optional.
+
+## Rule 3: Trust Tool Output Over Your Own Analysis
+
+If a CLI tool says a player has 16 rotelle metrics and 1946 minutes, that is correct. Do not second-guess tool output with your own queries. The tools use tested, pre-calculated data tables. Your ad-hoc queries use raw event tables with different semantics.
+
+## Rule 4: Player Reports — Always Use draft-prompts
+
+For player reports, you MUST use the `draft-prompts` command to generate narrative. Do NOT write narrative text yourself. The prompts contain formatting rules, section structure, and bullet length limits that you will violate if you write freehand.
+
+The workflow is:
+1. `render` — gathers data, creates manifest + context (no PDF)
+2. `draft-prompts` — generates prompts with embedded rules
+3. Dispatch each prompt to a Sonnet subagent
+4. Write subagent responses to the manifest
+5. `finalize` — generates the PDF
+6. `validate` — must return PASS
+
+## Rule 5: Do Not Diagnose Tool Bugs
+
+If a tool fails or returns empty data, report the exact command you ran and the exact output you received. Do not investigate the database, write a root cause analysis, or propose fixes to the codebase. Just report what happened and move on or ask for help.
+
+## Rule 6: Formatting
+
+When writing to report manifests:
+- Use colons, never em dashes (—)
+- Page 1 bullets must be under 85 characters after stripping HTML
+- Style description must be one sentence, max 20 words
+- Module commentary must use `<div class="module-section">` + `<h5>` + `<ul><li>`
+
+These rules are enforced by `validate`. Run it before sharing any PDF.
+- **Always verify competition IDs.** Never guess or assume competition IDs. Always query the database first:
+  ```bash
+  python -m tools.analyst.cli query "SELECT id, name FROM sb_competition WHERE name ILIKE '%<competition>%'"
+  ```
+
 ## Python Environment
 
 In this container, roque-suite dependencies are installed to system Python (no `.venv`). Run tools with:
@@ -23,6 +84,24 @@ In this container, roque-suite dependencies are installed to system Python (no `
 python3 -m tools.<tool_name>.cli <command>
 ```
 Not `source .venv/bin/activate` — that won't exist here.
+
+## Competition ID Reference
+
+**CRITICAL:** Always verify competition IDs via database query. Common IDs (verified):
+
+| Competition | ID |
+|-------------|-----|
+| Serie A | 12 |
+| Premier League | 2 |
+| La Liga | 11 |
+| Bundesliga | 9 |
+| Ligue 1 | 7 |
+| Eredivisie | 6 |
+| **Liga MX** | **73** |
+| Champions League | 16 |
+| Championship | 3 |
+
+**Never assume or guess competition IDs for other leagues.** Always query first.
 
 ## What You Can Do
 
