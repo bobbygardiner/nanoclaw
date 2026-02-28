@@ -179,6 +179,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   };
 
   await channel.setTyping?.(chatJid, true);
+  await channel.sendMessage(chatJid, 'Request received.');
   let hadError = false;
   let outputSentToUser = false;
 
