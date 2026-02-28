@@ -72,6 +72,7 @@ export class WhatsAppChannel implements Channel {
       logger,
       browser: Browsers.macOS('Chrome'),
       markOnlineOnConnect: false,
+      syncFullHistory: false,
     });
 
     this.sock.ev.on('connection.update', (update) => {
