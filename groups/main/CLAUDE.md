@@ -150,44 +150,29 @@ When asked to cover a live match (e.g. "cover the Milan game", "set up live upda
 
    **If the match has already started** (kickoff is in the past), go straight to step 2b.
 
-   **2a. If kickoff is in the future**, schedule a one-shot task to start polling ~5 minutes before kickoff:
+   **2a. If kickoff is in the future**, schedule a one-shot task to start polling ~10 minutes before kickoff (container startup takes several minutes):
    Use `schedule_task` with:
    - `schedule_type`: `"once"`
-   - `schedule_value`: kickoff time minus 5 minutes, as local ISO 8601 (e.g. `"2026-03-01T19:25:00"`)
+   - `schedule_value`: kickoff time minus 10 minutes, as ISO 8601 UTC (e.g. `"2026-03-01T18:20:00"`)
    - `context_mode`: `"isolated"`
-   - `prompt`:
-     ```
-     Schedule a repeating polling task for live match coverage.
-     Use schedule_task with:
-       schedule_type: "interval"
-       schedule_value: "60000"
-       context_mode: "isolated"
-       prompt: |
-         Run this exact command:
-         cd /workspace/extra/roque-suite && python3 -m tools.live_match.cli poll <match_id> --state-file /workspace/group/live_state_<match_id>.json
-         If it outputs text, send it to this chat exactly as printed (preserve formatting).
-         If it outputs nothing, do nothing.
-         If the output contains MATCH_COMPLETE, send the update text above it, then cancel this scheduled task.
-     ```
+   - `prompt`: (use the native loop prompt from step 2b below)
 
-   **2b. If kickoff is now or in the past**, schedule the polling task directly:
+   **2b. If kickoff is now or in the past**, schedule the native polling task:
    Use `schedule_task` with:
-   - `schedule_type`: `"interval"`
-   - `schedule_value`: `"60000"`
+   - `schedule_type`: `"once"`
+   - `schedule_value`: now (or the desired start time in ISO 8601 UTC)
    - `context_mode`: `"isolated"`
    - `prompt`:
      ```
-     Run this exact command:
-     cd /workspace/extra/roque-suite && python3 -m tools.live_match.cli poll <match_id> --state-file /workspace/group/live_state_<match_id>.json
-     If it outputs text, send it to this chat exactly as printed (preserve formatting).
-     If it outputs nothing, do nothing.
-     If the output contains MATCH_COMPLETE, send the update text above it, then cancel this scheduled task.
+     Execute this bash command in the foreground. It is a long-running process that will run for approximately 2 hours. Do NOT summarize its output. Do NOT return a result until the process exits on its own. Simply run it and wait:
+     cd /workspace/extra/roque-suite && python3 -m tools.live_match.cli poll <match_id> --loop --chat-jid <CHAT_JID> --state-file /workspace/group/live_state_<match_id>.json
+     This command handles everything internally — it polls the match every 60 seconds and sends messages via IPC files. Your only job is to run it and wait for it to exit.
      ```
+   Replace `<CHAT_JID>` with the chat JID of this conversation (check session context or use the main group JID).
 
 3. **Confirm to the user** that coverage is set up. If kickoff is in the future, tell them when polling will begin. Say: "Updates at 15', 30', HT, 60', 75', and FT, plus immediate goal alerts." Do NOT mention the polling frequency (every minute) or any other interval — the user doesn't need to know how often the tool checks internally.
 
 **Notes:**
-- Player names show as IDs (Live API uses different ID space). This is expected.
 - xG may show as `- xG` when enrichment is delayed. It resolves within a few minutes.
 - The `snapshot` command gives a one-off view: `python3 -m tools.live_match.cli snapshot <match_id>`
 
@@ -216,17 +201,10 @@ For each fixture in the JSON output, schedule three tasks:
    - schedule_type: "once"
    - schedule_value: the "live_coverage_at" value from the JSON
    - context_mode: "isolated"
-   - prompt: "Schedule a repeating polling task for live match coverage.
-     Use schedule_task with:
-       schedule_type: interval
-       schedule_value: 60000
-       context_mode: isolated
-       prompt: |
-         Run this exact command:
-         cd /workspace/extra/roque-suite && python3 -m tools.live_match.cli poll <match_id> --state-file /workspace/group/live_state_<match_id>.json
-         If it outputs text, send it to this chat exactly as printed (preserve formatting).
-         If it outputs nothing, do nothing.
-         If the output contains MATCH_COMPLETE, send the update text above it, then cancel this scheduled task."
+   - prompt: "Execute this bash command in the foreground. It is a long-running process that will run for approximately 2 hours. Do NOT summarize its output. Do NOT return a result until the process exits on its own. Simply run it and wait:
+     cd /workspace/extra/roque-suite && python3 -m tools.live_match.cli poll <match_id> --loop --chat-jid <CHAT_JID> --state-file /workspace/group/live_state_<match_id>.json
+     This command handles everything internally — it polls the match every 60 seconds and sends messages via IPC files. Your only job is to run it and wait for it to exit."
+   Replace <CHAT_JID> with the chat JID of this conversation.
 
 3. POST-MATCH: schedule_task with:
    - schedule_type: "once"

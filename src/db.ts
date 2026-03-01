@@ -447,16 +447,55 @@ export function getDueTasks(): ScheduledTask[] {
     .all(now) as ScheduledTask[];
 }
 
+/**
+ * Atomically claim due tasks so they won't be re-picked on the next poll.
+ * All tasks are set to status='running' so getDueTasks (which filters on
+ * status='active') won't return them again.  For cron/interval tasks the
+ * next_run is also advanced so the *next* occurrence is already scheduled;
+ * updateTaskAfterRun will flip them back to 'active' once the container
+ * finishes.
+ */
+export function claimDueTasks(
+  computeNextRun: (task: ScheduledTask) => string | null,
+): ScheduledTask[] {
+  const dueTasks = getDueTasks();
+  if (dueTasks.length === 0) return [];
+
+  const claimSimple = db.prepare(
+    `UPDATE scheduled_tasks SET status = 'running' WHERE id = ?`,
+  );
+  const claimAndAdvance = db.prepare(
+    `UPDATE scheduled_tasks SET status = 'running', next_run = ? WHERE id = ?`,
+  );
+
+  const claim = db.transaction((tasks: ScheduledTask[]) => {
+    for (const task of tasks) {
+      const nextRun = computeNextRun(task);
+      if (nextRun) {
+        claimAndAdvance.run(nextRun, task.id);
+      } else {
+        claimSimple.run(task.id);
+      }
+    }
+  });
+
+  claim(dueTasks);
+  return dueTasks;
+}
+
 export function updateTaskAfterRun(
   id: string,
   nextRun: string | null,
   lastResult: string,
 ): void {
   const now = new Date().toISOString();
+  // For once tasks (running → completed) and cron/interval tasks (keep active).
+  // next_run was already advanced by claimDueTasks, so we just record the result.
   db.prepare(
     `
     UPDATE scheduled_tasks
-    SET next_run = ?, last_run = ?, last_result = ?, status = CASE WHEN ? IS NULL THEN 'completed' ELSE status END
+    SET next_run = ?, last_run = ?, last_result = ?,
+        status = CASE WHEN ? IS NULL THEN 'completed' ELSE 'active' END
     WHERE id = ?
   `,
   ).run(nextRun, now, lastResult, nextRun, id);

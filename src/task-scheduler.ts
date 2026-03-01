@@ -11,8 +11,8 @@ import {
 } from './config.js';
 import { ContainerOutput, runContainerAgent, writeTasksSnapshot } from './container-runner.js';
 import {
+  claimDueTasks,
   getAllTasks,
-  getDueTasks,
   getTaskById,
   logTaskRun,
   updateTask,
@@ -41,7 +41,6 @@ async function runTask(
     groupDir = resolveGroupFolderPath(task.group_folder);
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
-    // Stop retry churn for malformed legacy rows.
     updateTask(task.id, { status: 'paused' });
     logger.error(
       { taskId: task.id, groupFolder: task.group_folder, error },
@@ -70,6 +69,8 @@ async function runTask(
   );
 
   if (!group) {
+    const error = `Group not found: ${task.group_folder}`;
+    updateTask(task.id, { status: 'paused' });
     logger.error(
       { taskId: task.id, groupFolder: task.group_folder },
       'Group not found for task',
@@ -80,7 +81,7 @@ async function runTask(
       duration_ms: Date.now() - startTime,
       status: 'error',
       result: null,
-      error: `Group not found: ${task.group_folder}`,
+      error,
     });
     return;
   }
@@ -110,9 +111,10 @@ async function runTask(
   const sessionId =
     task.context_mode === 'group' ? sessions[task.group_folder] : undefined;
 
-  // After the task produces a result, close the container promptly.
-  // Tasks are single-turn — no need to wait IDLE_TIMEOUT (30 min) for the
-  // query loop to time out. A short delay handles any final MCP calls.
+  // After the task agent produces a result, close the container promptly.
+  // Most tasks are single-turn and don't need to stay open.  For long-running
+  // tasks (e.g. --loop live polling) the agent blocks on the bash command and
+  // never emits a result until the process exits, so this timer never fires.
   const TASK_CLOSE_DELAY_MS = 10000;
   let closeTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -140,8 +142,6 @@ async function runTask(
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
-          // Forward result to user (sendMessage handles formatting)
-          await deps.sendMessage(task.chat_jid, streamedOutput.result);
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {
@@ -215,23 +215,31 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
 
   const loop = async () => {
     try {
-      const dueTasks = getDueTasks();
+      // Atomically claim due tasks so they won't be re-picked on the next poll.
+      // Once tasks get status='running'; cron/interval tasks get next_run advanced.
+      const dueTasks = claimDueTasks((task) => {
+        if (task.schedule_type === 'cron') {
+          const interval = CronExpressionParser.parse(task.schedule_value, {
+            tz: TIMEZONE,
+          });
+          return interval.next().toISOString();
+        } else if (task.schedule_type === 'interval') {
+          const ms = parseInt(task.schedule_value, 10);
+          return new Date(Date.now() + ms).toISOString();
+        }
+        return null;
+      });
+
       if (dueTasks.length > 0) {
         logger.info({ count: dueTasks.length }, 'Found due tasks');
       }
 
       for (const task of dueTasks) {
-        // Re-check task status in case it was paused/cancelled
-        const currentTask = getTaskById(task.id);
-        if (!currentTask || currentTask.status !== 'active') {
-          continue;
-        }
-
         deps.queue.enqueueTask(
-          currentTask.chat_jid,
-          currentTask.id,
-          () => runTask(currentTask, deps),
-          currentTask.context_mode === 'isolated',
+          task.chat_jid,
+          task.id,
+          () => runTask(task, deps),
+          task.context_mode === 'isolated',
         );
       }
     } catch (err) {
