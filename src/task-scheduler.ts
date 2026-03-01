@@ -231,6 +231,7 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
           currentTask.chat_jid,
           currentTask.id,
           () => runTask(currentTask, deps),
+          currentTask.context_mode === 'isolated',
         );
       }
     } catch (err) {

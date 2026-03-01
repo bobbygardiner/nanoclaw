@@ -9,6 +9,7 @@ interface QueuedTask {
   id: string;
   groupJid: string;
   fn: () => Promise<void>;
+  isolated?: boolean;
 }
 
 const MAX_RETRIES = 5;
@@ -18,6 +19,7 @@ interface GroupState {
   active: boolean;
   idleWaiting: boolean;
   isTaskContainer: boolean;
+  isolatedCount: number;
   pendingMessages: boolean;
   pendingTasks: QueuedTask[];
   process: ChildProcess | null;
@@ -41,6 +43,7 @@ export class GroupQueue {
         active: false,
         idleWaiting: false,
         isTaskContainer: false,
+        isolatedCount: 0,
         pendingMessages: false,
         pendingTasks: [],
         process: null,
@@ -85,7 +88,7 @@ export class GroupQueue {
     );
   }
 
-  enqueueTask(groupJid: string, taskId: string, fn: () => Promise<void>): void {
+  enqueueTask(groupJid: string, taskId: string, fn: () => Promise<void>, isolated: boolean = false): void {
     if (this.shuttingDown) return;
 
     const state = this.getGroup(groupJid);
@@ -96,8 +99,9 @@ export class GroupQueue {
       return;
     }
 
-    if (state.active) {
-      state.pendingTasks.push({ id: taskId, groupJid, fn });
+    // Isolated tasks bypass the per-group lock — they only check global concurrency
+    if (!isolated && state.active) {
+      state.pendingTasks.push({ id: taskId, groupJid, fn, isolated });
       if (state.idleWaiting) {
         this.closeStdin(groupJid);
       }
@@ -106,19 +110,19 @@ export class GroupQueue {
     }
 
     if (this.activeCount >= MAX_CONCURRENT_CONTAINERS) {
-      state.pendingTasks.push({ id: taskId, groupJid, fn });
+      state.pendingTasks.push({ id: taskId, groupJid, fn, isolated });
       if (!this.waitingGroups.includes(groupJid)) {
         this.waitingGroups.push(groupJid);
       }
       logger.debug(
-        { groupJid, taskId, activeCount: this.activeCount },
+        { groupJid, taskId, activeCount: this.activeCount, isolated },
         'At concurrency limit, task queued',
       );
       return;
     }
 
     // Run immediately
-    this.runTask(groupJid, { id: taskId, groupJid, fn }).catch((err) =>
+    this.runTask(groupJid, { id: taskId, groupJid, fn, isolated }).catch((err) =>
       logger.error({ groupJid, taskId, err }, 'Unhandled error in runTask'),
     );
   }
@@ -221,13 +225,19 @@ export class GroupQueue {
 
   private async runTask(groupJid: string, task: QueuedTask): Promise<void> {
     const state = this.getGroup(groupJid);
-    state.active = true;
+    const isolated = task.isolated ?? false;
+
+    if (isolated) {
+      state.isolatedCount++;
+    } else {
+      state.active = true;
+      state.isTaskContainer = true;
+    }
     state.idleWaiting = false;
-    state.isTaskContainer = true;
     this.activeCount++;
 
     logger.debug(
-      { groupJid, taskId: task.id, activeCount: this.activeCount },
+      { groupJid, taskId: task.id, isolated, activeCount: this.activeCount },
       'Running queued task',
     );
 
@@ -236,11 +246,15 @@ export class GroupQueue {
     } catch (err) {
       logger.error({ groupJid, taskId: task.id, err }, 'Error running task');
     } finally {
-      state.active = false;
-      state.isTaskContainer = false;
-      state.process = null;
-      state.containerName = null;
-      state.groupFolder = null;
+      if (isolated) {
+        state.isolatedCount--;
+      } else {
+        state.active = false;
+        state.isTaskContainer = false;
+        state.process = null;
+        state.containerName = null;
+        state.groupFolder = null;
+      }
       this.activeCount--;
       this.drainGroup(groupJid);
     }
@@ -274,24 +288,38 @@ export class GroupQueue {
 
     const state = this.getGroup(groupJid);
 
-    // Tasks first (they won't be re-discovered from SQLite like messages)
     if (state.pendingTasks.length > 0) {
-      const task = state.pendingTasks.shift()!;
-      this.runTask(groupJid, task).catch((err) =>
-        logger.error({ groupJid, taskId: task.id, err }, 'Unhandled error in runTask (drain)'),
-      );
-      return;
+      // Drain isolated tasks first — they can run alongside anything
+      const isolatedIdx = state.pendingTasks.findIndex((t) => t.isolated);
+      if (isolatedIdx >= 0 && this.activeCount < MAX_CONCURRENT_CONTAINERS) {
+        const task = state.pendingTasks.splice(isolatedIdx, 1)[0];
+        this.runTask(groupJid, task).catch((err) =>
+          logger.error({ groupJid, taskId: task.id, err }, 'Unhandled error in runTask (drain)'),
+        );
+        // Don't return — continue draining (multiple isolated tasks can start)
+        this.drainGroup(groupJid);
+        return;
+      }
+
+      // Non-isolated tasks need the group to be idle
+      if (!state.active) {
+        const task = state.pendingTasks.shift()!;
+        this.runTask(groupJid, task).catch((err) =>
+          logger.error({ groupJid, taskId: task.id, err }, 'Unhandled error in runTask (drain)'),
+        );
+        return;
+      }
     }
 
-    // Then pending messages
-    if (state.pendingMessages) {
+    // Then pending messages (need group idle)
+    if (state.pendingMessages && !state.active) {
       this.runForGroup(groupJid, 'drain').catch((err) =>
         logger.error({ groupJid, err }, 'Unhandled error in runForGroup (drain)'),
       );
       return;
     }
 
-    // Nothing pending for this group; check if other groups are waiting for a slot
+    // Nothing runnable for this group; check if other groups are waiting for a slot
     this.drainWaiting();
   }
 

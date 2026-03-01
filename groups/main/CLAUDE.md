@@ -14,6 +14,18 @@ When presenting outputs to the user:
 - **General rule:** Be concise in delivery. The analysis is the product — don't wrap it in fluff.
 - **Always confirm completion:** When you've completed a task, explicitly state that you've done it so the user knows it's finished.
 
+## Progress Updates
+
+**Never go silent for more than 30 seconds.** Use `send_message` to keep the user informed during multi-step tasks. Acknowledge immediately, then update at each major step.
+
+For a player report:
+1. Immediately: "Rendering André Luiz report (CM template)..."
+2. After data: "Data gathered. Drafting narrative (3 prompts)..."
+3. After narrative: "Narrative complete. Finalizing PDF..."
+4. Or if blocked: "Manifest has existing edits — cannot re-render. Use `refresh` to update data without losing edits."
+
+For any task taking more than ~30 seconds, send at least one intermediate update so the user knows you're working. A single "Working on it..." is better than silence.
+
 ## Primary Role
 
 Football analytics using roque-suite tools. Use the skills listed in the roque-suite CLAUDE.md as your main entry point.
@@ -56,35 +68,47 @@ When a skill (e.g. `/player-report`) defines a numbered workflow, execute each s
 
 If a CLI tool says a player has 16 rotelle metrics and 1946 minutes, that is correct. Do not second-guess tool output with your own queries. The tools use tested, pre-calculated data tables. Your ad-hoc queries use raw event tables with different semantics.
 
-## Rule 4: Player Reports — Always Use draft-prompts
+## Rule 4: Player Reports — Complete Narrative on EVERY Page
 
 For player reports, you MUST use the `draft-prompts` command to generate narrative. Do NOT write narrative text yourself. The prompts contain formatting rules, section structure, and bullet length limits that you will violate if you write freehand.
 
 The workflow is:
 1. `render` — gathers data, creates manifest + context (no PDF)
-2. `draft-prompts` — generates prompts with embedded rules
-3. Dispatch each prompt to a Sonnet subagent
-4. Write subagent responses to the manifest
+2. `draft-prompts` — generates N prompts (page1 + one per module with data)
+3. **Dispatch ALL N prompts** to Sonnet subagents — every single one, no exceptions
+4. **Write ALL N subagent responses** to the manifest — every page must have commentary
 5. `finalize` — generates the PDF
-6. `validate` — must return PASS
+6. `validate` — must return PASS with **zero errors**
 
-## Rule 5: Do Not Diagnose Tool Bugs
+**CRITICAL: If `draft-prompts` returns 3 prompts (e.g. page1, rotelle, injury), you MUST dispatch 3 subagents and write 3 responses. Skipping any prompt produces a report with "Pending analyst review" placeholder text, which is unacceptable. A report with placeholder text on ANY page is a failure.**
+
+**Self-check:** After writing all responses to the manifest, count the module commentary keys you wrote (`module.rotelle.commentary`, `module.injury.commentary`, etc.) and compare against `_meta.modules`. Every module in the list must have commentary unless the page was deleted.
+
+## Rule 5: Never Use --force on Render
+
+**NEVER** pass `--force` to `python -m tools.player_report.cli render`. If the CLI warns that a manifest has user edits or comments, **stop and report this to the user**. Do not override the guard — user edits are not yours to discard. Use `refresh` instead if the user wants updated data with edits preserved.
+
+## Rule 6: Do Not Diagnose Tool Bugs
 
 If a tool fails or returns empty data, report the exact command you ran and the exact output you received. Do not investigate the database, write a root cause analysis, or propose fixes to the codebase. Just report what happened and move on or ask for help.
 
-## Rule 6: Formatting
+## Rule 7: Formatting
 
 When writing to report manifests:
+- **ALL bullets** (page 1 AND module commentary) use `<strong>Label:</strong> detail` format
+- ALL bullets must be under 85 characters after stripping HTML
 - Use colons, never em dashes (—)
-- Page 1 bullets must be under 85 characters after stripping HTML
 - Style description must be one sentence, max 20 words
 - Module commentary must use `<div class="module-section">` + `<h5>` + `<ul><li>`
 
 These rules are enforced by `validate`. Run it before sharing any PDF.
-- **Always verify competition IDs.** Never guess or assume competition IDs. Always query the database first:
-  ```bash
-  python -m tools.analyst.cli query "SELECT id, name FROM sb_competition WHERE name ILIKE '%<competition>%'"
-  ```
+
+## Rule 8: Always Verify Competition IDs
+
+Never guess or assume competition IDs. Always query the database first:
+```bash
+python -m tools.analyst.cli query "SELECT id, name FROM sb_competition WHERE name ILIKE '%<competition>%'"
+```
 
 ## Python Environment
 
@@ -120,12 +144,36 @@ When asked to cover a live match (e.g. "cover the Milan game", "set up live upda
    ```bash
    cd /workspace/extra/roque-suite && python3 -m tools.live_match.cli find "<team1>" "<team2>"
    ```
-   Add `--date YYYY-MM-DD` if needed.
+   Add `--date YYYY-MM-DD` if needed. Note the `match_id` and `match_local_kick_off` time.
 
-2. **Schedule a polling task** (every 3 minutes):
+2. **Schedule coverage based on timing:**
+
+   **If the match has already started** (kickoff is in the past), go straight to step 2b.
+
+   **2a. If kickoff is in the future**, schedule a one-shot task to start polling ~5 minutes before kickoff:
+   Use `schedule_task` with:
+   - `schedule_type`: `"once"`
+   - `schedule_value`: kickoff time minus 5 minutes, as local ISO 8601 (e.g. `"2026-03-01T19:25:00"`)
+   - `context_mode`: `"isolated"`
+   - `prompt`:
+     ```
+     Schedule a repeating polling task for live match coverage.
+     Use schedule_task with:
+       schedule_type: "interval"
+       schedule_value: "60000"
+       context_mode: "isolated"
+       prompt: |
+         Run this exact command:
+         cd /workspace/extra/roque-suite && python3 -m tools.live_match.cli poll <match_id> --state-file /workspace/group/live_state_<match_id>.json
+         If it outputs text, send it to this chat exactly as printed (preserve formatting).
+         If it outputs nothing, do nothing.
+         If the output contains MATCH_COMPLETE, send the update text above it, then cancel this scheduled task.
+     ```
+
+   **2b. If kickoff is now or in the past**, schedule the polling task directly:
    Use `schedule_task` with:
    - `schedule_type`: `"interval"`
-   - `schedule_value`: `"180000"`
+   - `schedule_value`: `"60000"`
    - `context_mode`: `"isolated"`
    - `prompt`:
      ```
@@ -136,12 +184,103 @@ When asked to cover a live match (e.g. "cover the Milan game", "set up live upda
      If the output contains MATCH_COMPLETE, send the update text above it, then cancel this scheduled task.
      ```
 
-3. **Confirm to the user** that coverage is set up. Explain that updates come at 15-minute match intervals (15', 30', 60', 75'), with richer summaries at half-time and full-time. Do NOT say "every 3 minutes" — that is the internal polling frequency, not the update frequency.
+3. **Confirm to the user** that coverage is set up. If kickoff is in the future, tell them when polling will begin. Say: "Updates at 15', 30', HT, 60', 75', and FT, plus immediate goal alerts." Do NOT mention the polling frequency (every minute) or any other interval — the user doesn't need to know how often the tool checks internally.
 
 **Notes:**
 - Player names show as IDs (Live API uses different ID space). This is expected.
 - xG may show as `- xG` when enrichment is delayed. It resolves within a few minutes.
 - The `snapshot` command gives a one-off view: `python3 -m tools.live_match.cli snapshot <match_id>`
+
+## Automated Match Scheduling (Weekly Cron)
+
+A weekly cron task scans upcoming AC Milan fixtures and pre-schedules the full match-day lifecycle: pre-match report, live coverage, and post-match report.
+
+**Cron schedule:** `"0 8 * * 1"` (Monday 8am)
+
+**Cron prompt:**
+
+```
+Run this command:
+cd /workspace/extra/roque-suite && python3 -m tools.auto_report.cli fixtures 243 --days 9
+
+For each fixture in the JSON output, schedule three tasks:
+
+1. PRE-MATCH: schedule_task with:
+   - schedule_type: "once"
+   - schedule_value: the "pre_match_at" value from the JSON
+   - context_mode: "isolated"
+   - prompt: "Run: cd /workspace/extra/roque-suite && python3 -m tools.executive_pre_match.cli generate <match_id> --team 'AC Milan'
+     Send the output to this chat. Do not add any text before or after."
+
+2. LIVE COVERAGE: schedule_task with:
+   - schedule_type: "once"
+   - schedule_value: the "live_coverage_at" value from the JSON
+   - context_mode: "isolated"
+   - prompt: "Schedule a repeating polling task for live match coverage.
+     Use schedule_task with:
+       schedule_type: interval
+       schedule_value: 60000
+       context_mode: isolated
+       prompt: |
+         Run this exact command:
+         cd /workspace/extra/roque-suite && python3 -m tools.live_match.cli poll <match_id> --state-file /workspace/group/live_state_<match_id>.json
+         If it outputs text, send it to this chat exactly as printed (preserve formatting).
+         If it outputs nothing, do nothing.
+         If the output contains MATCH_COMPLETE, send the update text above it, then cancel this scheduled task."
+
+3. POST-MATCH: schedule_task with:
+   - schedule_type: "once"
+   - schedule_value: the "post_match_check_at" value from the JSON
+   - context_mode: "isolated"
+   - prompt: "Schedule a repeating check for post-match data.
+     Use schedule_task with:
+       schedule_type: interval
+       schedule_value: 600000
+       context_mode: isolated
+       prompt: |
+         Run: cd /workspace/extra/roque-suite && python3 -m tools.auto_report.cli check-post-match <match_id> --team 'AC Milan'
+         If it outputs text, send it to this chat exactly as printed.
+         If it outputs nothing, do nothing.
+         If the output contains REPORT_COMPLETE, send the report text above it, then cancel this scheduled task."
+
+Before creating each task, check existing scheduled tasks to avoid duplicates. If a task for the same match_id and type (pre/live/post) already exists, skip it.
+
+If no fixtures found, do nothing.
+```
+
+**--days 9 rationale:** Monday scan covers through the following Tuesday. A Wednesday match gets its pre-match scheduled for Monday (same day). A next-Monday match gets pre-match on Saturday, live on Monday, post-match on Tuesday.
+
+## Wishlist
+
+When the user asks to add something to the wishlist (e.g. "add this to wishlist", "save this idea", "wishlist: ..."), you MUST run the CLI tool. Do NOT just say "Added to wishlist" without running the command.
+
+**Add an item:**
+```bash
+cd /workspace/extra/roque-suite && python3 -m tools.wishlist.cli add -t "<title>" -d "<description>" --category <category> [--url "<url>"] [--tags "tag1,tag2"]
+```
+
+**Do NOT try to fetch or load URLs.** You cannot access the web. Extract the title/description from the user's message text and store the URL as-is for later reference. The user's description is sufficient context.
+
+Categories: `team-viz`, `match-analysis`, `player-scouting`, `tactical`, `squad-planning`, `coaching-league`, `uncategorized`
+
+**Then immediately enrich it** (same turn):
+1. Check the roque-suite codebase for similar existing tools
+2. Check which data sources (dbt tables, APIs) would be needed
+3. Estimate effort
+4. Write enrichment:
+```bash
+cd /workspace/extra/roque-suite && python3 -m tools.wishlist.cli write-enrichment <id> --feasibility <high/medium/low> --effort "<time>" --notes "<analysis>" [--similar "tool1,tool2"] [--data-sources "table1,table2"]
+```
+
+**Confirm to the user** with a one-line summary: "Added #<id>: <title>. Feasibility: <level>, effort: <time>."
+
+If the user sends an image with the wishlist request, save it to `/workspace/extra/roque-suite/outputs/wishlist/attachments/` and pass `--image <path>` to the add command.
+
+**Other commands:**
+- `list [--status inbox] [--category team-viz]` — list items
+- `show <id>` — show item details
+- `update <id> --status backlog --priority high` — update fields
+- `digest --days 7` — activity summary
 
 ## What You Can Do
 
