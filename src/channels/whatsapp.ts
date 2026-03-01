@@ -4,12 +4,51 @@ import path from 'path';
 
 import makeWASocket, {
   Browsers,
+  CacheStore,
   DisconnectReason,
   WASocket,
   fetchLatestWaWebVersion,
   makeCacheableSignalKeyStore,
   useMultiFileAuthState,
 } from '@whiskeysockets/baileys';
+
+/**
+ * Minimal bounded TTL cache satisfying Baileys' CacheStore interface.
+ * Created fresh on each reconnect so old instances are GC'd.
+ */
+function makeBoundedCache(maxSize: number, ttlMs: number): CacheStore {
+  const store = new Map<string, { value: unknown; expires: number }>();
+
+  const evict = () => {
+    const now = Date.now();
+    for (const [k, v] of store) {
+      if (v.expires < now) store.delete(k);
+    }
+    if (store.size > maxSize) {
+      const excess = store.size - maxSize;
+      let i = 0;
+      for (const k of store.keys()) {
+        if (i++ >= excess) break;
+        store.delete(k);
+      }
+    }
+  };
+
+  return {
+    get<T>(key: string): T | undefined {
+      const entry = store.get(key);
+      if (!entry) return undefined;
+      if (entry.expires < Date.now()) { store.delete(key); return undefined; }
+      return entry.value as T;
+    },
+    set<T>(key: string, value: T): void {
+      if (store.size >= maxSize) evict();
+      store.set(key, { value, expires: Date.now() + ttlMs });
+    },
+    del(key: string): void { store.delete(key); },
+    flushAll(): void { store.clear(); },
+  };
+}
 
 import { ASSISTANT_HAS_OWN_NUMBER, ASSISTANT_NAME, STORE_DIR } from '../config.js';
 import {
@@ -62,6 +101,13 @@ export class WhatsAppChannel implements Channel {
       return { version: undefined };
     });
 
+    // Create fresh bounded cache instances on each reconnect so old instances
+    // are dereferenced and GC'd — prevents cross-reconnect memory leaks.
+    const msgRetryCounterCache = makeBoundedCache(500, 60 * 60 * 1000);
+    const callOfferCache = makeBoundedCache(100, 5 * 60 * 1000);
+    const placeholderResendCache = makeBoundedCache(500, 60 * 60 * 1000);
+    const userDevicesCache = makeBoundedCache(500, 5 * 60 * 1000);
+
     this.sock = makeWASocket({
       version,
       auth: {
@@ -73,6 +119,16 @@ export class WhatsAppChannel implements Channel {
       browser: Browsers.macOS('Chrome'),
       markOnlineOnConnect: false,
       syncFullHistory: false,
+      // Returning false skips the Syncing state entirely, preventing
+      // resyncAppState (regular_low/regular_high) from firing on reconnect.
+      // This is the primary cause of the 3-4GB OOM crash on reconnect.
+      // Trade-off: contact names, pin/mute/archive states may be stale.
+      shouldSyncHistoryMessage: () => false,
+      enableRecentMessageCache: false,
+      msgRetryCounterCache,
+      callOfferCache,
+      placeholderResendCache,
+      userDevicesCache,
     });
 
     this.sock.ev.on('connection.update', (update) => {
