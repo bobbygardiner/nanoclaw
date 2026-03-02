@@ -142,9 +142,9 @@ async function runTask(
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
-          scheduleClose();
         }
         if (streamedOutput.status === 'success') {
+          scheduleClose();
           deps.queue.notifyIdle(task.chat_jid);
         }
         if (streamedOutput.status === 'error') {

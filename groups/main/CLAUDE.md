@@ -50,7 +50,7 @@ You are an automated agent running roque-suite tools via CLI. Follow these rules
 ```bash
 # CORRECT: Use the CLI
 python -m tools.analyst.cli player "Raul Jimenez"
-python -m tools.player_report.cli render 5568 -c 2 -p 7
+python -m tools.player_report.cli render 5568 -c 2 -p CF
 
 # WRONG: Ad-hoc SQL
 python -c "from tools.analyst.tools import execute_query; execute_query('SELECT ...')"
@@ -84,9 +84,9 @@ The workflow is:
 
 **Self-check:** After writing all responses to the manifest, count the module commentary keys you wrote (`module.rotelle.commentary`, `module.injury.commentary`, etc.) and compare against `_meta.modules`. Every module in the list must have commentary unless the page was deleted.
 
-## Rule 5: Never Use --force on Render
+## Rule 5: Protect User Edits on Render
 
-**NEVER** pass `--force` to `python -m tools.player_report.cli render`. If the CLI warns that a manifest has user edits or comments, **stop and report this to the user**. Do not override the guard — user edits are not yours to discard. Use `refresh` instead if the user wants updated data with edits preserved.
+Do not pass `--force` to `render` unless the user explicitly asks for a force re-render (e.g. "force rerender", "re-render with --force", "overwrite it"). If the CLI warns that a manifest has user edits, **tell the user** and suggest `refresh` to preserve edits. But if the user insists on a full re-render, `--force` is allowed — they own their edits.
 
 ## Rule 6: Do Not Diagnose Tool Bugs
 
@@ -135,6 +135,23 @@ Not `source .venv/bin/activate` — that won't exist here.
 | Championship | 3 |
 
 **Never assume or guess competition IDs for other leagues.** Always query first.
+
+## Position Group Reference
+
+**CRITICAL:** Always pass position as a text alias (`-p CM`), **never** a numeric ID (`-p 7`). The CLI resolves aliases automatically.
+
+| ID | Position | Alias |
+|----|----------|-------|
+| 1 | Goalkeeper | GK |
+| 2 | Full Back | FB |
+| 3 | Centre Back | CB |
+| 4 | Defensive Mid | DM |
+| 5 | **Central Mid** | **CM** |
+| 6 | Attacking Mid | AM |
+| 7 | **Striker** | **CF** |
+| 8 | Winger | Winger |
+
+**7 is Striker/CF, NOT CM.** CM is 5. This mistake has happened before — always cross-check against this table when reading manifests or passing `-p` flags.
 
 ## Live Match Coverage
 
@@ -217,9 +234,8 @@ For each fixture in the JSON output, schedule three tasks:
        context_mode: isolated
        prompt: |
          Run: cd /workspace/extra/roque-suite && python3 -m tools.auto_report.cli check-post-match <match_id> --team 'AC Milan'
-         If it outputs text, send it to this chat exactly as printed.
          If it outputs nothing, do nothing.
-         If the output contains REPORT_COMPLETE, send the report text above it, then cancel this scheduled task."
+         If the output contains REPORT_COMPLETE, follow the AGENT INSTRUCTIONS in the output to draft game notes and player notes, then send the completed report to this chat. Do NOT send the DATA CONTEXT or AGENT INSTRUCTIONS sections — only the finished report. Then cancel this scheduled task."
 
 Before creating each task, check existing scheduled tasks to avoid duplicates. If a task for the same match_id and type (pre/live/post) already exists, skip it.
 
